@@ -1,4 +1,4 @@
-package ors
+package motis
 
 import (
 	"fmt"
@@ -35,7 +35,7 @@ func NewClient(opts ...ClientOption) *Client {
 func (c *Client) ResolveURL(path string) *url.URL {
 	return &url.URL{
 		Scheme: c.baseUrl.Scheme,
-		Host: c.baseUrl.Host,
-		Path: fmt.Sprintf("/ors/v2/%s", strings.TrimPrefix(path, "/")),
-	}	
+		Host:   c.baseUrl.Host,
+		Path:   fmt.Sprintf("/api/v1/%s", strings.TrimPrefix(path, "/")),
+	}
 }
