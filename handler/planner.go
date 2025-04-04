@@ -2,13 +2,15 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/commute-my/ducky"
 	"github.com/commute-my/ducky/motis"
 )
+
+var SupportedTransitModes = []motis.TransitMode{motis.TransitModeSubway, motis.TransitModeBus, motis.TransitModeOther}
 
 type DuckyPlan struct {
 	From        DuckyStop        `json:"from"`
@@ -45,39 +47,35 @@ type DuckyLeg struct {
 
 func DuckyPlanFromMotis(p motis.Plan) DuckyPlan {
 	itineraries := make([]DuckyItinerary, len(p.Itineraries))
+
 	for i, it := range p.Itineraries {
 		legs := make([]DuckyLeg, len(it.Legs))
+
 		for j, l := range it.Legs {
 			intermediateStops := make([]DuckyStop, len(l.IntermediateStops))
+
 			for k, is := range l.IntermediateStops {
-				stop := DuckyStop{
-					Name: is.Name,
-					Lat:  is.Lat,
-					Lon:  is.Lon,
+				intermediateStops[k] = DuckyStop{
+					Name:   is.Name,
+					StopID: ducky.ConvertToID(l.From.StopID),
+					Lat:    is.Lat,
+					Lon:    is.Lon,
 				}
-
-				for _, l := range ducky.Lines {
-					for _, s := range l.Stations {
-						if strings.Join([]string{l.MotisPrefix, s.ID}, "_") == is.StopID {
-							stop.StopID = s.ID
-						}
-					}
-				}
-
-				intermediateStops[k] = stop
 			}
 
-			leg := DuckyLeg{
+			legs[j] = DuckyLeg{
 				Mode: l.Mode,
 				From: DuckyStop{
-					Name: l.From.Name,
-					Lat:  l.From.Lat,
-					Lon:  l.From.Lon,
+					Name:   l.From.Name,
+					StopID: ducky.ConvertToID(l.From.StopID),
+					Lat:    l.From.Lat,
+					Lon:    l.From.Lon,
 				},
 				To: DuckyStop{
-					Name: l.To.Name,
-					Lat:  l.To.Lat,
-					Lon:  l.To.Lon,
+					Name:   l.To.Name,
+					StopID: ducky.ConvertToID(l.From.StopID),
+					Lat:    l.To.Lat,
+					Lon:    l.To.Lon,
 				},
 				Duration:          l.Duration,
 				StartTime:         l.StartTime,
@@ -86,24 +84,6 @@ func DuckyPlanFromMotis(p motis.Plan) DuckyPlan {
 				RouteShortName:    l.RouteShortName,
 				IntermediateStops: intermediateStops,
 			}
-
-			for _, l := range ducky.Lines {
-				for _, s := range l.Stations {
-					if strings.Join([]string{l.MotisPrefix, s.ID}, "_") == leg.From.StopID {
-						leg.From.StopID = s.ID
-
-						break
-					}
-
-					if strings.Join([]string{l.MotisPrefix, s.ID}, "_") == leg.To.StopID {
-						leg.To.StopID = s.ID
-
-						break
-					}
-				}
-			}
-
-			legs[j] = leg
 		}
 
 		itineraries[i] = DuckyItinerary{
@@ -115,39 +95,21 @@ func DuckyPlanFromMotis(p motis.Plan) DuckyPlan {
 		}
 	}
 
-	plan := DuckyPlan{
+	return DuckyPlan{
 		From: DuckyStop{
 			Name:   p.From.Name,
-			StopID: p.From.StopID,
+			StopID: ducky.ConvertToID(p.From.StopID),
 			Lat:    p.From.Lat,
 			Lon:    p.From.Lon,
 		},
 		To: DuckyStop{
 			Name:   p.To.Name,
-			StopID: p.To.StopID,
+			StopID: ducky.ConvertToID(p.From.StopID),
 			Lat:    p.To.Lat,
 			Lon:    p.To.Lon,
 		},
 		Itineraries: itineraries,
 	}
-
-	for _, l := range ducky.Lines {
-		for _, s := range l.Stations {
-			if strings.Join([]string{l.MotisPrefix, s.ID}, "_") == plan.From.StopID {
-				plan.From.StopID = s.ID
-
-				break
-			}
-
-			if strings.Join([]string{l.MotisPrefix, s.ID}, "_") == plan.To.StopID {
-				plan.To.StopID = s.ID
-
-				break
-			}
-		}
-	}
-
-	return plan
 }
 
 type Planner struct {
@@ -166,32 +128,27 @@ func (h *Planner) Plan(w http.ResponseWriter, r *http.Request) {
 		To   string `json:"to"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Invalid request format: %v", err), http.StatusBadRequest)
 		return
 	}
 
 	if data.From == "" || data.To == "" {
-		http.Error(w, "from and to are required", http.StatusBadRequest)
+		http.Error(w, "Both 'from' and 'to' fields are required", http.StatusBadRequest)
 		return
 	}
 
-	for _, l := range ducky.Lines {
-		for _, s := range l.Stations {
-			if s.ID == data.From {
-				data.From = strings.Join([]string{l.MotisPrefix, s.ID}, "_")
-			}
+	fromID := ducky.ConvertToMotisID(data.From)
+	toID := ducky.ConvertToMotisID(data.To)
 
-			if s.ID == data.To {
-				data.To = strings.Join([]string{l.MotisPrefix, s.ID}, "_")
-			}
-		}
-	}
-
-	motisPlan, err := h.motisCli.Plan(time.Now(), data.From, data.To, []motis.TransitMode{motis.TransitModeSubway, motis.TransitModeBus, motis.TransitModeOther})
+	motisPlan, err := h.motisCli.Plan(time.Now(), fromID, toID, SupportedTransitModes)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to get route: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(DuckyPlanFromMotis(motisPlan))
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(DuckyPlanFromMotis(motisPlan)); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encode response: %v", err), http.StatusInternalServerError)
+		return
+	}
 }

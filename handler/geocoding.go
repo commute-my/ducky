@@ -58,7 +58,7 @@ func (h *Geocoder) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if data.Query == "" {
-		http.Error(w, "query is required", http.StatusBadRequest)
+		http.Error(w, "Query is required", http.StatusBadRequest)
 		return
 	}
 
